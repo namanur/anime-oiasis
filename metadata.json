@@ -1,0 +1,5 @@
+{
+  "name": "Anime Oasis: Filter & Find",
+  "description": "Discover and track real anime from popular sources like MyAnimeList. Features Google Login simulation, genre filtering, and a personalized watchlist, all wrapped in a sleek liquid glass design.",
+  "requestFramePermissions": []
+}
