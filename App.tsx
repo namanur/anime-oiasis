@@ -7,11 +7,8 @@ import AnimeCard from './components/AnimeCard';
 import AnimeDetail from './components/AnimeDetail';
 import AnimeCardSkeleton from './components/AnimeCardSkeleton';
 
-// A mock user for demonstration
-const MOCK_USER: User = {
-    name: 'Jane Doe',
-    avatarUrl: 'https://i.pravatar.cc/150?u=a042581f4e29026704d',
-};
+// IMPORTANT: Replace with your own Google Client ID
+const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
 
 const App: React.FC = () => {
     const [animes, setAnimes] = useState<Anime[]>([]);
@@ -57,6 +54,50 @@ const App: React.FC = () => {
         localStorage.setItem('animeWatchlist', JSON.stringify(watchlist));
     }, [watchlist]);
 
+    const handleCredentialResponse = (response: any) => {
+        // Decode the JWT to get user info
+        const decoded: { name: string; picture: string; email: string } = JSON.parse(atob(response.credential.split('.')[1]));
+        
+        setUser({
+            name: decoded.name,
+            avatarUrl: decoded.picture,
+        });
+        setIsLoggedIn(true);
+    };
+    
+    // Google OAuth Integration
+    useEffect(() => {
+        if (window.google) {
+            window.google.accounts.id.initialize({
+                client_id: GOOGLE_CLIENT_ID,
+                callback: handleCredentialResponse
+            });
+            
+            const googleButton = document.getElementById('google-signin-button');
+            if (googleButton) {
+                window.google.accounts.id.renderButton(
+                    googleButton,
+                    { theme: "outline", size: "large", type: "standard" } 
+                );
+            }
+
+            // Optional: Prompt for one-tap sign-in on subsequent visits
+            // window.google.accounts.id.prompt();
+        } else {
+            console.error("Google Identity Services script not loaded.");
+        }
+    }, []);
+
+
+    const handleLogout = () => {
+        if (window.google) {
+           window.google.accounts.id.disableAutoSelect();
+        }
+        setIsLoggedIn(false);
+        setUser(null);
+    };
+
+
     const toggleWatchlist = (animeId: number) => {
         setWatchlist(prev => 
             prev.includes(animeId) 
@@ -66,16 +107,6 @@ const App: React.FC = () => {
     };
 
     const isWatchlisted = (animeId: number) => watchlist.includes(animeId);
-
-    const handleLogin = () => {
-        setIsLoggedIn(true);
-        setUser(MOCK_USER);
-    };
-
-    const handleLogout = () => {
-        setIsLoggedIn(false);
-        setUser(null);
-    };
 
     const fetchAnimes = useCallback(async (page: number, term: string, reset: boolean) => {
         setIsLoading(true);
@@ -160,7 +191,7 @@ const App: React.FC = () => {
 
     return (
         <div className="min-h-screen bg-slate-900 text-white font-sans flex flex-col items-center p-4 sm:p-8">
-            <Header isLoggedIn={isLoggedIn} user={user} onLogin={handleLogin} onLogout={handleLogout} />
+            <Header isLoggedIn={isLoggedIn} user={user} onLogout={handleLogout} />
             <main className="w-full max-w-7xl flex flex-col items-center">
                 <FilterControls 
                     genres={genres}
