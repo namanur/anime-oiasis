@@ -1,45 +1,37 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getTrendingAnime, searchAnime, getGenres } from './services/anilist';
-import type { Anime, User } from './types';
+import { jwtDecode } from 'jwt-decode';
+
 import Header from './components/Header';
 import FilterControls from './components/FilterControls';
 import AnimeCard from './components/AnimeCard';
 import AnimeDetail from './components/AnimeDetail';
 import AnimeCardSkeleton from './components/AnimeCardSkeleton';
 
-// IMPORTANT: Replace with your own Google Client ID
-const GOOGLE_CLIENT_ID = "513258378640-qurfco33eeiej1r0kbhbgjs8tst9ofc0.apps.googleusercontent.com";
+import { fetchAnime } from './services/anilist';
+import type { Anime, User } from './types';
 
 const App: React.FC = () => {
-    const [animes, setAnimes] = useState<Anime[]>([]);
-    const [genres, setGenres] = useState<string[]>(['All Genres']);
-    const [searchTerm, setSearchTerm] = useState('');
-    const [selectedGenre, setSelectedGenre] = useState('All Genres');
-    const [isLoading, setIsLoading] = useState(false);
+    const [animeList, setAnimeList] = useState<Anime[]>([]);
+    const [isLoading, setIsLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
     const [selectedAnime, setSelectedAnime] = useState<Anime | null>(null);
-    const [currentPage, setCurrentPage] = useState(1);
-    const [hasNextPage, setHasNextPage] = useState(true);
-    
-    // For user state
-    const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+    // Filter and pagination state
+    const [currentPage, setCurrentPage] = useState<number>(1);
+    const [hasNextPage, setHasNextPage] = useState<boolean>(false);
+    const [searchTerm, setSearchTerm] = useState<string>('');
+    const [debouncedSearchTerm, setDebouncedSearchTerm] = useState<string>('');
+    const [selectedGenre, setSelectedGenre] = useState<string>('');
+    const [sortOption, setSortOption] = useState<string>('POPULARITY_DESC');
+
+    // User and watchlist state
     const [user, setUser] = useState<User | null>(null);
+    const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+    const [watchlist, setWatchlist] = useState<number[]>([]);
 
-    // Watchlist state
-    const [watchlist, setWatchlist] = useState<number[]>(() => {
-        try {
-            const saved = localStorage.getItem('animeWatchlist');
-            return saved ? JSON.parse(saved) : [];
-        } catch (error) {
-            console.error("Failed to parse watchlist from localStorage", error);
-            return [];
-        }
-    });
-    const [showWatchlistOnly, setShowWatchlistOnly] = useState(false);
-
-    const observer = useRef<IntersectionObserver>();
+    const observer = useRef<IntersectionObserver | null>(null);
     const lastAnimeElementRef = useCallback((node: HTMLDivElement) => {
-        if (isLoading || showWatchlistOnly) return;
+        if (isLoading) return;
         if (observer.current) observer.current.disconnect();
         observer.current = new IntersectionObserver(entries => {
             if (entries[0].isIntersecting && hasNextPage) {
@@ -47,209 +39,209 @@ const App: React.FC = () => {
             }
         });
         if (node) observer.current.observe(node);
-    }, [isLoading, hasNextPage, showWatchlistOnly]);
+    }, [isLoading, hasNextPage]);
 
-    // Persist watchlist to localStorage
+    // Load watchlist from local storage on initial render
     useEffect(() => {
-        localStorage.setItem('animeWatchlist', JSON.stringify(watchlist));
-    }, [watchlist]);
-
-    const handleCredentialResponse = (response: any) => {
-        // Decode the JWT to get user info
-        const decoded: { name: string; picture: string; email: string } = JSON.parse(atob(response.credential.split('.')[1]));
-        
-        setUser({
-            name: decoded.name,
-            avatarUrl: decoded.picture,
-        });
-        setIsLoggedIn(true);
-    };
-    
-    // Google OAuth Integration
-    useEffect(() => {
-        if (window.google) {
-            window.google.accounts.id.initialize({
-                client_id: GOOGLE_CLIENT_ID,
-                callback: handleCredentialResponse
-            });
-            
-            const googleButton = document.getElementById('google-signin-button');
-            if (googleButton) {
-                window.google.accounts.id.renderButton(
-                    googleButton,
-                    { theme: "outline", size: "large", type: "standard" } 
-                );
+        try {
+            const storedWatchlist = localStorage.getItem('anime-watchlist');
+            if (storedWatchlist) {
+                setWatchlist(JSON.parse(storedWatchlist));
             }
-
-            // Optional: Prompt for one-tap sign-in on subsequent visits
-            // window.google.accounts.id.prompt();
-        } else {
-            console.error("Google Identity Services script not loaded.");
+        } catch (e) {
+            console.error("Failed to parse watchlist from localStorage", e);
         }
     }, []);
 
+    // Save watchlist to local storage when it changes
+    useEffect(() => {
+        localStorage.setItem('anime-watchlist', JSON.stringify(watchlist));
+    }, [watchlist]);
+    
+    // Debounce search term
+    useEffect(() => {
+        const handler = setTimeout(() => {
+            setDebouncedSearchTerm(searchTerm);
+        }, 500); // 500ms delay
+
+        return () => {
+            clearTimeout(handler);
+        };
+    }, [searchTerm]);
+
+    // Effect for initial load and filter/sort changes
+    useEffect(() => {
+        const loadInitialData = async () => {
+            setIsLoading(true);
+            setError(null);
+            try {
+                const response = await fetchAnime({
+                    page: 1,
+                    perPage: 20,
+                    search: debouncedSearchTerm,
+                    genre: selectedGenre || undefined,
+                    sort: sortOption,
+                });
+                setAnimeList(response.anime);
+                setHasNextPage(response.hasNextPage);
+                setCurrentPage(1); // Explicitly set to 1
+            } catch (err) {
+                setError('Failed to fetch anime. Please try again later.');
+                console.error(err);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        loadInitialData();
+    }, [debouncedSearchTerm, selectedGenre, sortOption]);
+
+    // Effect for subsequent page loads (infinite scroll)
+    useEffect(() => {
+        if (currentPage === 1) return;
+
+        const loadMoreData = async () => {
+            setIsLoading(true);
+            setError(null);
+            try {
+                const response = await fetchAnime({
+                    page: currentPage,
+                    perPage: 20,
+                    search: debouncedSearchTerm,
+                    genre: selectedGenre || undefined,
+                    sort: sortOption,
+                });
+
+                setAnimeList(prevList => {
+                    const existingIds = new Set(prevList.map(a => a.id));
+                    const newAnime = response.anime.filter(a => !existingIds.has(a.id));
+                    return [...prevList, ...newAnime];
+                });
+                setHasNextPage(response.hasNextPage);
+            } catch (err) {
+                setError('Failed to fetch anime. Please try again later.');
+                console.error(err);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        loadMoreData();
+    }, [currentPage, debouncedSearchTerm, selectedGenre, sortOption]);
+    
+    // Google Sign-In
+    const handleCredentialResponse = useCallback((response: any) => {
+        try {
+            const decoded: { name: string, picture: string, sub: string } = jwtDecode(response.credential);
+            const loggedInUser: User = {
+                name: decoded.name,
+                avatarUrl: decoded.picture,
+            };
+            setUser(loggedInUser);
+            setIsLoggedIn(true);
+            localStorage.setItem('user', JSON.stringify(loggedInUser));
+        } catch (error) {
+            console.error("Error decoding JWT", error);
+        }
+    }, []);
 
     const handleLogout = () => {
-        if (window.google) {
+        setUser(null);
+        setIsLoggedIn(false);
+        localStorage.removeItem('user');
+        if (window.google?.accounts.id) {
            window.google.accounts.id.disableAutoSelect();
         }
-        setIsLoggedIn(false);
-        setUser(null);
     };
 
+    useEffect(() => {
+        // Check for existing user in local storage
+        const storedUser = localStorage.getItem('user');
+        if (storedUser) {
+            try {
+                setUser(JSON.parse(storedUser));
+                setIsLoggedIn(true);
+            } catch (e) {
+                console.error("Failed to parse user from localStorage", e);
+                localStorage.removeItem('user');
+            }
+        }
 
-    const toggleWatchlist = (animeId: number) => {
+        // Initialize Google Sign-In
+        if (window.google?.accounts.id) {
+            window.google.accounts.id.initialize({
+                // FIXME: Replace with your actual Google Client ID
+                client_id: '513258378640-qurfco33eeiej1r0kbhbgjs8tst9ofc0.apps.googleusercontent.com', 
+                callback: handleCredentialResponse
+            });
+            const GSIButton = document.getElementById('google-signin-button');
+            if (GSIButton && !GSIButton.hasChildNodes()) {
+                window.google.accounts.id.renderButton(
+                    GSIButton,
+                    { theme: "outline", size: "large", type: "standard" }
+                );
+            }
+            if(!storedUser){
+                window.google.accounts.id.prompt();
+            }
+        } else {
+            console.error("Google Identity Services library not loaded.");
+        }
+    }, [handleCredentialResponse]);
+
+    const handleToggleWatchlist = (animeId: number) => {
         setWatchlist(prev => 
             prev.includes(animeId) 
-                ? prev.filter(id => id !== animeId) 
+                ? prev.filter(id => id !== animeId)
                 : [...prev, animeId]
         );
     };
 
-    const isWatchlisted = (animeId: number) => watchlist.includes(animeId);
-
-    const fetchAnimes = useCallback(async (page: number, term: string, reset: boolean) => {
-        setIsLoading(true);
-        setError(null);
-        try {
-            const res = term
-                ? await searchAnime(term, page)
-                : await getTrendingAnime(page);
-
-            setAnimes(prev => {
-                const newAnimes = res.media;
-                if (reset) return newAnimes;
-                
-                // Prevent duplicates
-                const existingIds = new Set(prev.map(a => a.id));
-                const uniqueNewAnimes = newAnimes.filter(a => !existingIds.has(a.id));
-                return [...prev, ...uniqueNewAnimes];
-            });
-            setHasNextPage(res.hasNextPage);
-        } catch (err) {
-            setError('Failed to fetch anime data. Please try again later.');
-        } finally {
-            setIsLoading(false);
-        }
-    }, []);
-
-    // Fetch genres on mount
-    useEffect(() => {
-        getGenres()
-            .then(genreData => setGenres(['All Genres', ...genreData]))
-            .catch(err => console.error("Failed to fetch genres:", err));
-    }, []);
-
-    // Handle fetching data on search term change (debounced) or page change
-    useEffect(() => {
-        if (showWatchlistOnly) return; // Don't fetch when viewing watchlist
-
-        const isNewSearch = currentPage === 1;
-        const handler = setTimeout(() => {
-            fetchAnimes(currentPage, searchTerm, isNewSearch);
-        }, isNewSearch ? 500 : 0); // Debounce new searches, but load next pages instantly
-        
-        return () => clearTimeout(handler);
-    }, [searchTerm, currentPage, fetchAnimes, showWatchlistOnly]);
-
-
-    const handleSearchChange = (term: string) => {
-        if (term !== searchTerm) {
-            setAnimes([]); // Immediately clear results for better UX
-            setCurrentPage(1);
-            setSearchTerm(term);
-        }
-    };
-
-    const handleGenreChange = (genre: string) => {
-        setSelectedGenre(genre);
-    };
-
-    const handleClearFilters = () => {
-        if (searchTerm !== '' || selectedGenre !== 'All Genres' || showWatchlistOnly) {
-            setAnimes([]);
-            setCurrentPage(1);
-            setSearchTerm('');
-            setSelectedGenre('All Genres');
-            setShowWatchlistOnly(false);
-        }
-    };
-
-    const getFilteredAnimes = () => {
-        let animeSource = animes;
-        if (showWatchlistOnly) {
-            const watchlistSet = new Set(watchlist);
-            animeSource = animes.filter(anime => watchlistSet.has(anime.id));
-        }
-
-        return animeSource.filter(anime =>
-            selectedGenre === 'All Genres' || anime.genres.includes(selectedGenre)
-        );
-    }
-    
-    const filteredAnimes = getFilteredAnimes();
-
     return (
-        <div className="min-h-screen bg-slate-900 text-white font-sans flex flex-col items-center p-4 sm:p-8">
-            <Header isLoggedIn={isLoggedIn} user={user} onLogout={handleLogout} />
-            <main className="w-full max-w-7xl flex flex-col items-center">
+        <div className="bg-slate-900 text-white min-h-screen font-sans">
+            <main className="container mx-auto px-4 py-8 flex flex-col items-center">
+                <Header isLoggedIn={isLoggedIn} user={user} onLogout={handleLogout} />
+
                 <FilterControls 
-                    genres={genres}
                     searchTerm={searchTerm}
+                    setSearchTerm={setSearchTerm}
                     selectedGenre={selectedGenre}
-                    onSearchChange={handleSearchChange}
-                    onGenreChange={handleGenreChange}
-                    onClearFilters={handleClearFilters}
-                    showWatchlistOnly={showWatchlistOnly}
-                    onToggleWatchlistFilter={() => setShowWatchlistOnly(!showWatchlistOnly)}
+                    setSelectedGenre={setSelectedGenre}
+                    sortOption={sortOption}
+                    setSortOption={setSortOption}
                 />
-
-                {isLoading && animes.length === 0 && (
-                    <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-6 w-full">
-                        {Array.from({ length: 18 }).map((_, i) => <AnimeCardSkeleton key={i} />)}
-                    </div>
-                )}
-                {error && <p className="mt-8 text-lg text-red-400">{error}</p>}
-
-                <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-6 w-full">
-                    {filteredAnimes.map((anime, index) => {
-                        const isLastElement = filteredAnimes.length === index + 1;
-                        return (
-                           <div ref={isLastElement ? lastAnimeElementRef : null} key={`${anime.id}-${index}`}>
-                             <AnimeCard 
-                                anime={anime} 
-                                onSelect={() => setSelectedAnime(anime)}
-                                isWatchlisted={isWatchlisted(anime.id)}
-                                onToggleWatchlist={toggleWatchlist}
-                             />
-                           </div>
-                        );
+                
+                <div className="w-full max-w-7xl grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    {animeList.map((anime, index) => {
+                        const cardProps = {
+                            key: `${anime.id}-${index}`,
+                            anime,
+                            onSelect: setSelectedAnime,
+                            isWatchlisted: watchlist.includes(anime.id),
+                            onToggleWatchlist: handleToggleWatchlist
+                        };
+                        if (animeList.length === index + 1) {
+                            return <div ref={lastAnimeElementRef}><AnimeCard {...cardProps} /></div>;
+                        }
+                        return <AnimeCard {...cardProps} />;
                     })}
+                    {isLoading && Array.from({ length: 10 }).map((_, i) => <AnimeCardSkeleton key={`skeleton-${i}`} />)}
                 </div>
 
-                {isLoading && animes.length > 0 && <p className="mt-8 text-lg animate-pulse">Loading more...</p>}
-
-                {!isLoading && !showWatchlistOnly && animes.length > 0 && filteredAnimes.length === 0 && (
-                    <p className="mt-8 text-lg text-slate-400">No anime match the selected genre in the current results.</p>
+                {!isLoading && animeList.length === 0 && (
+                     <div className="w-full text-center py-16">
+                        <p className="text-slate-400 text-xl">No results found.</p>
+                        <p className="text-slate-500 mt-2">Try adjusting your search or filters.</p>
+                    </div>
                 )}
                 
-                {showWatchlistOnly && filteredAnimes.length === 0 && (
-                    <p className="mt-8 text-lg text-slate-400">Your watchlist is empty or no items match the genre filter.</p>
-                )}
-
-
-                {!isLoading && animes.length === 0 && !error && (
-                    <p className="mt-8 text-lg text-slate-400">No results found. Try a different search term!</p>
-                )}
+                {error && <p className="text-red-500 text-center mt-8">{error}</p>}
 
                 {selectedAnime && (
-                    <AnimeDetail 
-                        anime={selectedAnime} 
-                        onClose={() => setSelectedAnime(null)} 
-                    />
+                    <AnimeDetail anime={selectedAnime} onClose={() => setSelectedAnime(null)} />
                 )}
             </main>
         </div>
     );
 };
+
 export default App;
