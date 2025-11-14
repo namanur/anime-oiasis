@@ -8,7 +8,7 @@ import AnimeDetail from './components/AnimeDetail';
 import AnimeCardSkeleton from './components/AnimeCardSkeleton';
 
 // IMPORTANT: Replace with your own Google Client ID
-const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = "513258378640-qurfco33eeiej1r0kbhbgjs8tst9ofc0.apps.googleusercontent.com";
 
 const App: React.FC = () => {
     const [animes, setAnimes] = useState<Anime[]>([]);
